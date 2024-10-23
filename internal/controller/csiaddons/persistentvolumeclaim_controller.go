@@ -67,6 +67,7 @@ var (
 	rsCronJobNameAnnotation         = "reclaimspace." + csiaddonsv1alpha1.GroupVersion.Group + "/cronjob"
 	rsCSIAddonsDriverAnnotation     = "reclaimspace." + csiaddonsv1alpha1.GroupVersion.Group + "/drivers"
 
+	krEnableAnnotation           = "keyrotation." + csiaddonsv1alpha1.GroupVersion.Group + "/enable"
 	krcJobScheduleTimeAnnotation = "keyrotation." + csiaddonsv1alpha1.GroupVersion.Group + "/schedule"
 	krcJobNameAnnotation         = "keyrotation." + csiaddonsv1alpha1.GroupVersion.Group + "/cronjob"
 	krCSIAddonsDriverAnnotation  = "keyrotation." + csiaddonsv1alpha1.GroupVersion.Group + "/drivers"
@@ -754,6 +755,25 @@ func (r *PersistentVolumeClaimReconciler) processKeyRotation(
 		}
 	}
 
+	disabled, err := r.checkDisabledByAnnotation(ctx, logger, pvc, krEnableAnnotation)
+	if err != nil {
+		return err
+	}
+
+	if disabled {
+		if krcJob != nil {
+			err = r.Delete(ctx, krcJob)
+			if client.IgnoreNotFound(err) != nil {
+				errMsg := "failed to delete EncryptionKeyRotationCronJob"
+				logger.Error(err, errMsg)
+				return fmt.Errorf("%s: %w", errMsg, err)
+			}
+		}
+
+		logger.Info("EncryptionKeyRotationCronJob is disabled by annotation, exiting reconcile")
+		return nil
+	}
+
 	// Determine schedule
 	sched, err := r.determineScheduleAndRequeue(ctx, logger, pvc, pv.Spec.CSI.Driver, krcJobScheduleTimeAnnotation)
 	if errors.Is(err, ErrScheduleNotFound) {
@@ -975,4 +995,80 @@ func (r *PersistentVolumeClaimReconciler) getScheduleFromPVC(
 	}
 
 	return ""
+}
+
+// checkAnnotationForValue checks if the given object has the specified annotation
+// with the expected value.
+func checkAnnotationForValue(obj metav1.Object, key, expected string) bool {
+	if val, ok := obj.GetAnnotations()[key]; ok && val == expected {
+		return true
+	}
+	return false
+}
+
+// hasValidStorageClassName checks if the provided PersistentVolumeClaim has a non-empty StorageClassName.
+func hasValidStorageClassName(pvc *corev1.PersistentVolumeClaim) bool {
+	return pvc.Spec.StorageClassName != nil && len(*pvc.Spec.StorageClassName) > 0
+}
+
+func (r *PersistentVolumeClaimReconciler) checkDisabledByAnnotation(
+	ctx context.Context,
+	logger *logr.Logger,
+	pvc *corev1.PersistentVolumeClaim,
+	annotationKey string) (bool, error) {
+
+	if r.SchedulePrecedence == util.ScheduleSCOnly {
+		if !hasValidStorageClassName(pvc) {
+			return false, nil
+		}
+		storageClassName := *pvc.Spec.StorageClassName
+
+		sc := &storagev1.StorageClass{}
+		err := r.Client.Get(ctx, client.ObjectKey{Name: storageClassName}, sc)
+		if err != nil {
+			logger.Error(err, "Failed to get StorageClass", "StorageClass", storageClassName)
+			return false, err
+		}
+
+		if checkAnnotationForValue(sc, annotationKey, "false") {
+			return true, nil
+		}
+
+		return false, nil
+	}
+
+	// Else, we follow the regular precedence
+	// Check on PVC
+	if checkAnnotationForValue(pvc, annotationKey, "false") {
+		return true, nil
+	}
+
+	// Check on Namespace
+	ns := &corev1.Namespace{}
+	err := r.Client.Get(ctx, types.NamespacedName{Name: pvc.Namespace}, ns)
+	if err != nil {
+		logger.Error(err, "Failed to get Namespace", "Namespace", pvc.Namespace)
+		return false, err
+	}
+	if checkAnnotationForValue(ns, annotationKey, "false") {
+		return true, nil
+	}
+
+	// Check on SC
+	if !hasValidStorageClassName(pvc) {
+		return false, nil
+	}
+	storageClassName := *pvc.Spec.StorageClassName
+
+	sc := &storagev1.StorageClass{}
+	err = r.Client.Get(ctx, client.ObjectKey{Name: storageClassName}, sc)
+	if err != nil {
+		logger.Error(err, "Failed to get StorageClass", "StorageClass", storageClassName)
+		return false, err
+	}
+	if checkAnnotationForValue(sc, annotationKey, "false") {
+		return true, nil
+	}
+
+	return false, nil
 }
