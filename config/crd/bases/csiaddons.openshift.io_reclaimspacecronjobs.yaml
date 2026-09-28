@@ -106,6 +106,14 @@ spec:
                         maximum: 60
                         minimum: 0
                         type: integer
+                      controllerReclaim:
+                        description: |-
+                          ControllerReclaim enables the controller-side reclaim space operation
+                          (the ControllerReclaimSpace CSI-addons RPC) in addition to the node-side
+                          reclaim. It is disabled by default because it is redundant once the
+                          node-side reclaim (for example, fstrim/discard) has run, and for some
+                          drivers it is costly or unsafe on in-use volumes.
+                        type: boolean
                       retryDeadlineSeconds:
                         default: 600
                         description: |-

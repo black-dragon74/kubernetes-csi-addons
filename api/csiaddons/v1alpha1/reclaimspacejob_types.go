@@ -72,6 +72,14 @@ type ReclaimSpaceJobSpec struct {
 	// +optional
 	// +kubebuilder:validation:Minimum=60
 	Timeout *int64 `json:"timeout,omitempty"`
+
+	// ControllerReclaim enables the controller-side reclaim space operation
+	// (the ControllerReclaimSpace CSI-addons RPC) in addition to the node-side
+	// reclaim. It is disabled by default because it is redundant once the
+	// node-side reclaim (for example, fstrim/discard) has run, and for some
+	// drivers it is costly or unsafe on in-use volumes.
+	// +optional
+	ControllerReclaim bool `json:"controllerReclaim,omitempty"`
 }
 
 // ReclaimSpaceJobStatus defines the observed state of ReclaimSpaceJob
