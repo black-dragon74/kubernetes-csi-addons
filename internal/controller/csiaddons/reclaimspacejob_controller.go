@@ -253,8 +253,8 @@ func (r *ReclaimSpaceJobReconciler) reconcile(
 	}
 
 	var (
-		nodeFound          = false
-		nodeReclaimedSpace *int64
+		nodeFound, controllerFound                   bool
+		nodeReclaimedSpace, controllerReclaimedSpace *int64
 	)
 	if target.canNodeReclaimSpace() {
 		nodeFound = true
@@ -270,12 +270,7 @@ func (r *ReclaimSpaceJobReconciler) reconcile(
 		}
 	}
 
-	var (
-		controllerFound          bool
-		controllerReclaimedSpace *int64
-	)
-
-	if utils.EnableControllerReclaimSpace {
+	if rsJob.Spec.ControllerReclaim {
 		controllerFound, controllerReclaimedSpace, err = r.controllerReclaimSpace(ctx, logger, target)
 		if err != nil {
 			logger.Error(err, "Failed to make controller request")
@@ -289,7 +284,17 @@ func (r *ReclaimSpaceJobReconciler) reconcile(
 	}
 
 	if !controllerFound && !nodeFound {
-		err = fmt.Errorf("controller and Node Client not found for %q nodeID", target.nodeID)
+		// We reach here only if nothing ran, populate the reason dynamically.
+		// Node-side reclaim requires the volume to be attached to a node, and
+		// controller-side reclaim is opt-in via spec.controllerReclaim.
+		reason := "the volume is not attached to any node for node-side reclaim"
+		if rsJob.Spec.ControllerReclaim {
+			reason += ", and no controller was found for controller-side reclaim"
+		} else {
+			reason += ", and controller-side reclaim is disabled (set spec.controllerReclaim to true to enable)"
+		}
+		err = fmt.Errorf("no reclaim space operation performed for PVC %q: %s",
+			rsJob.Spec.Target.PersistentVolumeClaim, reason)
 		setFailedCondition(
 			&rsJob.Status.Conditions,
 			err.Error(),
